@@ -1,25 +1,23 @@
 /**
  * Copyright (c) 2024 OceanBase
  * OceanBase CE is licensed under Mulan PubL v2.
- * You can use this software according to the terms and conditions of the Mulan PubL v2.
- * You may obtain a copy of Mulan PubL v2 at:
+ * You can use this software according to the terms and conditions of the Mulan
+ * PubL v2. You may obtain a copy of Mulan PubL v2 at:
  *          http://license.coscl.org.cn/MulanPubL-2.0
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
- * EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
- * MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
- * See the Mulan PubL v2 for more details.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY
+ * KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+ * NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE. See the
+ * Mulan PubL v2 for more details.
  */
 #define USING_LOG_PREFIX SERVER
 #include "ob_redis_set_cmd.h"
+#include "observer/table/ob_table_mutiscan.h"
 #include "observer/table/redis/operator/ob_redis_set_operator.h"
 
-namespace oceanbase
-{
-namespace table
-{
+namespace oceanbase {
+namespace table {
 
-int SetAgg::init(const ObIArray<ObString> &args)
-{
+int SetAgg::init(const ObIArray<ObString> &args) {
   int ret = OB_SUCCESS;
   if (OB_FAIL(init_common(args))) {
     LOG_WARN("fail to init sdiff", K(ret));
@@ -30,22 +28,22 @@ int SetAgg::init(const ObIArray<ObString> &args)
   return ret;
 }
 
-int SetAgg::apply(ObRedisCtx &redis_ctx)
-{
+int SetAgg::apply(ObRedisCtx &redis_ctx) {
   int ret = OB_SUCCESS;
   SetCommandOperator cmd_op(redis_ctx);
   if (!is_inited_) {
     ret = OB_NOT_INIT;
     LOG_WARN("sdiff not inited", K(ret));
-  } else if (OB_FAIL(cmd_op.do_aggregate(redis_ctx.get_request_db(), *keys_, agg_func_))) {
+  } else if (OB_FAIL(cmd_op.do_aggregate(redis_ctx.get_request_db(), *keys_,
+                                         agg_func_))) {
     LOG_WARN("fail to do set diff", K(ret), K_(keys));
   }
   return ret;
 }
 
-int SAdd::init(const ObIArray<ObString> &args)
-{
+int SAdd::init(const ObIArray<ObString> &args) {
   int ret = OB_SUCCESS;
+
   if (OB_FAIL(init_common(args))) {
     LOG_WARN("fail to init sdiff", K(ret));
   } else if (OB_FAIL(args.at(0, key_))) {
@@ -70,21 +68,41 @@ int SAdd::init(const ObIArray<ObString> &args)
   return ret;
 }
 
-int SAdd::apply(ObRedisCtx &redis_ctx)
-{
+int SAdd::apply(ObRedisCtx &redis_ctx) {
   int ret = OB_SUCCESS;
-  SetCommandOperator cmd_op(redis_ctx);
-  if (!is_inited_) {
-    ret = OB_NOT_INIT;
-    LOG_WARN("sdiff not inited", K(ret));
-  } else if (OB_FAIL(cmd_op.do_sadd(redis_ctx.get_request_db(), key_, members_))) {
-    LOG_WARN("fail to do set diff", K(ret), K(key_));
+  int64_t start_time = ObTimeUtility::current_time();
+  // mutiscan
+  if (key_.compare("MUTISCAN") == 0) {
+    ObTableMultiScanQueryResultIterator msItr;
+    msItr.set_tenant_id(redis_ctx.credential_->tenant_id_);
+    msItr.set_database_id(
+        redis_ctx.credential_->database_id_); /* database = test*/
+    msItr.set_credential_(*redis_ctx.credential_);
+    if (OB_FAIL(msItr.init(members_.begin()->first))) {
+      LOG_WARN("MultiScan init failed", K(ret));
+    } else if (OB_FAIL(msItr.query_and_result())) {
+      int64_t use_time = ObTimeUtility::current_time() - start_time;
+      LOG_WARN("MultiScan query and result failed", K(ret), K(use_time));
+    }
+    if (ret == OB_ITER_END) {
+      ret = OB_SUCCESS;
+      redis_ctx.response_.set_res_array(msItr.res_arr_);
+    }
+  } // end
+  else {
+    SetCommandOperator cmd_op(redis_ctx);
+    if (!is_inited_) {
+      ret = OB_NOT_INIT;
+      LOG_WARN("sdiff not inited", K(ret));
+    } else if (OB_FAIL(cmd_op.do_sadd(redis_ctx.get_request_db(), key_,
+                                      members_))) {
+      LOG_WARN("fail to do set diff", K(ret), K(key_));
+    }
   }
   return ret;
 }
 
-int SetAggStore::init(const ObIArray<ObString> &args)
-{
+int SetAggStore::init(const ObIArray<ObString> &args) {
   int ret = OB_SUCCESS;
   if (OB_FAIL(init_common(args))) {
     LOG_WARN("fail to init sdiff", K(ret));
@@ -106,18 +124,17 @@ int SetAggStore::init(const ObIArray<ObString> &args)
   return ret;
 }
 
-int SetAggStore::apply(ObRedisCtx &redis_ctx)
-{
+int SetAggStore::apply(ObRedisCtx &redis_ctx) {
   int ret = OB_SUCCESS;
   SetCommandOperator cmd_op(redis_ctx);
   if (!is_inited_) {
     ret = OB_NOT_INIT;
     LOG_WARN("sdiff not inited", K(ret));
-  } else if (OB_FAIL(
-                 cmd_op.do_aggregate_store(redis_ctx.get_request_db(), dest_, keys_, agg_func_))) {
+  } else if (OB_FAIL(cmd_op.do_aggregate_store(redis_ctx.get_request_db(),
+                                               dest_, keys_, agg_func_))) {
     LOG_WARN("fail to do set diff", K(ret), K_(keys));
   }
   return ret;
 }
-}  // namespace table
-}  // namespace oceanbase
+} // namespace table
+} // namespace oceanbase
